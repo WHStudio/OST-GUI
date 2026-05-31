@@ -40,6 +40,7 @@ function App() {
   const [steamApps, setSteamApps] = useState<{appId: string, name: string}[]>([]);
   const [isLoadingLib, setIsLoadingLib] = useState(false);
   const [gameNames, setGameNames] = useState<Record<string, string>>({});
+  const resolvedNamesRef = useRef<Set<string>>(new Set());
 
   const showStatus = (msg: string, type: 'info' | 'success' | 'error' = 'info') => {
     setStatusMsg(msg);
@@ -50,7 +51,7 @@ function App() {
     if (!steamPath) return;
     setIsLoadingLib(true);
     
-    // Load SafeSteamTools lua games
+    // Load lua
     const installed = await window.api.listInstalled(steamPath);
     setGames(installed || []);
 
@@ -60,11 +61,12 @@ function App() {
       setSteamApps(apps || []);
     }
 
-    const namesToResolve = installed.filter(g => g.appId && !gameNames[g.appId]);
+    const namesToResolve = installed.filter(g => g.appId && !resolvedNamesRef.current.has(g.appId));
     for (const g of namesToResolve) {
       if (!g.appId) continue;
       const result = await window.api.lookupAppId(g.appId);
       if (result.success && result.name) {
+        resolvedNamesRef.current.add(g.appId);
         setGameNames(prev => ({ ...prev, [g.appId!]: result.name! }));
       }
     }
@@ -84,23 +86,19 @@ function App() {
     init();
   }, []);
 
-  useEffect(() => {
-    if (activeTab === 'library' && steamPath) loadLibrary();
-  }, [activeTab, steamPath, loadLibrary]);
-
   // Auto-lookup game name or search when input changes
   useEffect(() => {
-    setLookedUpName(null);
-    setLookedUpDlcs([]);
-    setSearchResults([]);
     if (lookupTimer.current) clearTimeout(lookupTimer.current);
 
     const trimmed = appId.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      queueMicrotask(() => setIsLooking(false));
+      return;
+    }
 
     if (trimmed.match(/^\d+$/)) {
-      if (trimmed.length < 3) return; // Need at least 3 digits for an AppID
-      setIsLooking(true);
+      if (trimmed.length < 3) { queueMicrotask(() => setIsLooking(false)); return; } // Need at least 3 digits for an AppID
+      queueMicrotask(() => setIsLooking(true));
       lookupTimer.current = setTimeout(async () => {
         const result = await window.api.lookupAppId(trimmed);
         if (result.success && result.name) {
@@ -113,7 +111,7 @@ function App() {
         setIsLooking(false);
       }, 500);
     } else {
-      setIsLooking(true);
+      queueMicrotask(() => setIsLooking(true));
       lookupTimer.current = setTimeout(async () => {
         if (window.api.searchGame) {
           const result = await window.api.searchGame(trimmed);
@@ -135,31 +133,31 @@ function App() {
       const dir = await window.api.selectDirectory();
       if (dir) {
         setSteamPath(dir);
-        showStatus('Steam path updated manually', 'success');
+        showStatus('已手动更新 Steam 路径', 'success');
       }
     }
   };
 
   const handleAutoPatch = async () => {
     if (!steamPath) return;
-    showStatus('Patching Steam...', 'info');
+    showStatus('正在修补 Steam...', 'info');
     const result = await window.api.autoPatch(steamPath);
     showStatus(result.message, result.success ? 'success' : 'error');
   };
 
   const handleRestart = async () => {
     if (!steamPath) return;
-    showStatus('Restarting Steam...', 'info');
+    showStatus('正在重启 Steam...', 'info');
     const result = await window.api.restartSteam(steamPath);
     showStatus(result.message, result.success ? 'success' : 'error');
   };
 
   const handleFetch = async () => {
-    if (!steamPath) { showStatus('Steam path not found.', 'error'); return; }
-    if (!appId.match(/^\d+$/)) { showStatus('AppID must be numeric.', 'error'); return; }
+    if (!steamPath) { showStatus('未找到 Steam 路径。', 'error'); return; }
+    if (!appId.match(/^\d+$/)) { showStatus('AppID 必须为数字。', 'error'); return; }
 
     setIsFetching(true);
-    showStatus(`Fetching ${lookedUpName || appId}...`, 'info');
+    showStatus(`正在获取 ${lookedUpName || appId}...`, 'info');
     const dlcsToFetch = (includeDlcs && lookedUpDlcs) ? lookedUpDlcs : [];
     const result = await window.api.downloadManifests(steamPath, appId, dlcsToFetch);
     showStatus(result.message, result.success ? 'success' : 'error');
@@ -176,15 +174,16 @@ function App() {
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (!steamPath) { showStatus('Steam path not found.', 'error'); return; }
+    if (!steamPath) { showStatus('未找到 Steam 路径。', 'error'); return; }
 
     const files = Array.from(e.dataTransfer.files)
-      .map((f: any) => window.api.getFilePath ? window.api.getFilePath(f) : f.path)
-      .filter((p) => typeof p === 'string' && p.length > 0);
+      .map((f: File & { path?: string }) => window.api.getFilePath ? window.api.getFilePath(f) : f.path)
+      .filter((p): p is string => typeof p === 'string' && p.length > 0)
+      .map(p => ({ name: p.split(/[/\\]/).pop() || p, path: p }));
 
-    if (files.length === 0) { showStatus('No valid files detected.', 'error'); return; }
+    if (files.length === 0) { showStatus('未检测到有效文件。', 'error'); return; }
 
-    showStatus(`Installing ${files.length} files...`, 'info');
+    showStatus(`正在安装 ${files.length} 个文件...`, 'info');
     const result = await window.api.installMods(steamPath, files);
     showStatus(result.message, result.success ? 'success' : 'error');
   };
@@ -192,7 +191,7 @@ function App() {
   const handleRemoveGame = async (game: InstalledGame) => {
     if (!steamPath) return;
     const displayName = (game.appId && gameNames[game.appId]) || game.gameName;
-    showStatus(`Removing ${displayName}...`, 'info');
+    showStatus(`正在移除 ${displayName}...`, 'info');
     const result = await window.api.removeGame(steamPath, game.luaFile, game.depotIds);
     showStatus(result.message, result.success ? 'success' : 'error');
     if (result.success) loadLibrary();
@@ -242,28 +241,28 @@ function App() {
 
         {/* Header */}
         <div className="header">
-          <div className="header-logo">SafeSteamTools</div>
+          <div className="header-logo">OST-GUI</div>
         </div>
 
         {/* Steam Path */}
-        <div className="steam-path-pill" onClick={handleSelectSteamPath} title="Click to manually select Steam folder">
+        <div className="steam-path-pill" onClick={handleSelectSteamPath} title="点击手动选择 Steam 文件夹">
           <div className={`dot ${steamPath ? 'connected' : 'disconnected'}`} />
-          <span>{steamPath || 'Steam not found (Click to Browse)'}</span>
+          <span>{steamPath || '未找到 Steam, 点此手动选择安装路径'}</span>
         </div>
 
         {/* Tab Navigation */}
         <div className="tab-nav">
           <button className={`tab-btn ${activeTab === 'fetcher' ? 'active' : ''}`} onClick={() => setActiveTab('fetcher')}>
-            {IconFetch} Fetch
+            {IconFetch} 获取游戏
           </button>
           <button className={`tab-btn ${activeTab === 'files' ? 'active' : ''}`} onClick={() => setActiveTab('files')}>
-            {IconFiles} Files
+            {IconFiles} 脚本文件
           </button>
-          <button className={`tab-btn ${activeTab === 'library' ? 'active' : ''}`} onClick={() => setActiveTab('library')}>
-            {IconLibrary} Library
+          <button className={`tab-btn ${activeTab === 'library' ? 'active' : ''}`} onClick={() => { setActiveTab('library'); if (steamPath) loadLibrary(); }}>
+            {IconLibrary} 游戏仓库
           </button>
           <button className={`tab-btn ${activeTab === 'fixes' ? 'active' : ''}`} onClick={() => setActiveTab('fixes')}>
-            {IconFixes} Fixes
+            {IconFixes} 在线修复
           </button>
         </div>
 
@@ -280,19 +279,19 @@ function App() {
                     <polyline points="7 10 12 15 17 10"/>
                     <line x1="12" y1="15" x2="12" y2="3"/>
                   </svg>
-                  Auto-Fetcher
+                  获取游戏
                 </div>
                 <div className="card-desc">
-                  Enter a Steam AppID or search by Game Name to download manifests.
+                  输入 Steam AppID 或 搜索游戏名称
                 </div>
 
                 <div className="input-row">
                   <input
                     type="text"
-                    placeholder="AppID or Game Name..."
+                    placeholder="AppID 或 游戏名称..."
                     className="input-field"
                     value={appId}
-                    onChange={(e) => setAppId(e.target.value)}
+                    onChange={(e) => { setAppId(e.target.value); setLookedUpName(null); setLookedUpDlcs([]); setSearchResults([]); setIsLooking(true); }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         if (appId.match(/^\d+$/)) handleFetch();
@@ -305,7 +304,7 @@ function App() {
                     disabled={!appId.match(/^\d+$/) || isFetching}
                     className="btn btn-fetch"
                   >
-                    {isFetching ? <span className="spinner" /> : 'Fetch'}
+                    {isFetching ? <span className="spinner" /> : '获取'}
                   </button>
                 </div>
 
@@ -313,7 +312,7 @@ function App() {
                 {appId.trim() !== '' && (
                   <div className="game-preview" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
                     {isLooking ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><span className="spinner" /> Searching...</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><span className="spinner" /> 搜索中...</div>
                     ) : appId.match(/^\d+$/) ? (
                       lookedUpName ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', width: '100%' }}>
@@ -327,17 +326,17 @@ function App() {
                                 onChange={(e) => setIncludeDlcs(e.target.checked)}
                                 style={{ margin: 0, accentColor: 'var(--accent-cyan)' }}
                               />
-                              Include {lookedUpDlcs.length} DLC{lookedUpDlcs.length !== 1 ? 's' : ''}
+                              包含 {lookedUpDlcs.length} 个 DLC
                             </label>
                           )}
                         </div>
                       ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><span className="game-preview-dot error" />Game not found</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><span className="game-preview-dot error" />未找到游戏</div>
                       )
                     ) : (
                       searchResults.length > 0 ? (
                         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>Search Results:</div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>搜索结果：</div>
                           {searchResults.map((res) => (
                             <div 
                               key={res.id}
@@ -356,7 +355,7 @@ function App() {
                           ))}
                         </div>
                       ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><span className="game-preview-dot error" />No results found</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><span className="game-preview-dot error" />未找到结果</div>
                       )
                     )}
                   </div>
@@ -380,7 +379,7 @@ function App() {
                     <polyline points="17 8 12 3 7 8" />
                     <line x1="12" y1="3" x2="12" y2="15" />
                   </svg>
-                  <p>Drag & drop <strong>.lua</strong> and <strong>.manifest</strong> files</p>
+                  <p>拖放 <strong>.lua</strong> 和 <strong>.manifest</strong> 文件</p>
                 </div>
               </div>
 
@@ -389,11 +388,11 @@ function App() {
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>
                   </svg>
-                  How it works
+                  工作原理
                 </div>
                 <div className="card-desc">
-                  Drop your <strong>.lua</strong> scripts and <strong>.manifest</strong> files here.
-                  They will be automatically sorted into Steam's <code>config/lua</code> and <code>depotcache</code> folders.
+                  将你的 <strong>.lua</strong> 脚本和 <strong>.manifest</strong> 文件拖放到此处, 
+                  它们将自动分类到 Steam 的 <code>config/lua</code> 和 <code>depotcache</code> 文件夹中。
                 </div>
               </div>
             </div>
@@ -409,16 +408,15 @@ function App() {
               ) : games.length === 0 ? (
                 <div className="card" style={{ textAlign: 'center' }}>
                   <div className="card-desc" style={{ margin: 0 }}>
-                    No games installed via SafeSteamTools yet.<br />
-                    Use the <strong>Fetch</strong> or <strong>Files</strong> tab to add games.
+                    尚未获取游戏<br />
                   </div>
                 </div>
               ) : (
                 <>
                   <div className="library-header">
-                    <span>{games.length} game{games.length !== 1 ? 's' : ''} installed</span>
+                    <span>已安装 {games.length} 个游戏</span>
                     <button className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '0.7rem' }} onClick={loadLibrary}>
-                      Refresh
+                      刷新
                     </button>
                   </div>
                   {games.map((game, i) => {
@@ -435,8 +433,8 @@ function App() {
                             </div>
                             <div className="game-meta">
                               {game.appId && <span>AppID: {game.appId}</span>}
-                              <span>{game.depotIds.length} depot{game.depotIds.length !== 1 ? 's' : ''}</span>
-                              <span>{game.manifestCount} manifest{game.manifestCount !== 1 ? 's' : ''}</span>
+                              <span>{game.depotIds.length} 个 depot</span>
+                              <span>{game.manifestCount} 个 manifest</span>
                             </div>
                           </div>
                           <button
@@ -444,7 +442,7 @@ function App() {
                             style={{ padding: '6px 12px', fontSize: '0.7rem', flexShrink: 0 }}
                             onClick={() => handleRemoveGame(game)}
                           >
-                            Remove
+                            移除
                           </button>
                         </div>
                       </div>
@@ -460,21 +458,21 @@ function App() {
             <div className="tab-panel" key="fixes">
               <div className="card" style={{ paddingBottom: '1.5rem' }}>
                 <div className="card-title">
-                  {IconFixes} Apply Online Fix
+                  {IconFixes} 在线修复
                 </div>
                 <div className="card-desc">
-                  Select a game and drop your <strong>.zip</strong> or <strong>.rar</strong> fix archive. SafeSteamTools will automatically extract it into the game's directory.
+                  选择一个游戏并将你的 <strong>.zip</strong> 或 <strong>.rar</strong> 修复压缩包拖放到此处, 将自动将其解压到游戏目录中。
                 </div>
                 
                 <div style={{ marginBottom: '1.2rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Target Game:</label>
+                  <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>目标游戏：</label>
                   <select 
                     className="input-field" 
                     style={{ cursor: 'pointer', appearance: 'auto' }}
                     value={selectedFixAppId}
                     onChange={(e) => setSelectedFixAppId(e.target.value)}
                   >
-                    <option value="" disabled>Select a game...</option>
+                    <option value="" disabled>选择游戏...</option>
                     {steamApps.map(app => (
                       <option key={app.appId} value={app.appId}>
                         {app.name} ({app.appId})
@@ -501,12 +499,12 @@ function App() {
                       if (filePath && window.api.installOnlineFix) {
                         const targetApp = steamApps.find(a => a.appId === selectedFixAppId);
                         const displayName = targetApp ? targetApp.name : selectedFixAppId;
-                        showStatus(`Installing fix for ${displayName}...`, 'info');
+                        showStatus(`正在为 ${displayName} 安装修复...`, 'info');
                         const res = await window.api.installOnlineFix(steamPath, selectedFixAppId, filePath);
                         showStatus(res.message, res.success ? 'success' : 'error');
                       }
                     } else {
-                      showStatus('Please drop a valid .zip or .rar file!', 'error');
+                      showStatus('请拖放有效的 .zip 或 .rar 文件！', 'error');
                     }
                   }}
                 >
@@ -516,7 +514,7 @@ function App() {
                       <polyline points="17 8 12 3 7 8" />
                       <line x1="12" y1="3" x2="12" y2="15" />
                     </svg>
-                    <p>{selectedFixAppId ? <span>Drop <strong>.zip / .rar</strong> file here to install</span> : 'Please select a game first'}</p>
+                    <p>{selectedFixAppId ? <span>将 <strong>.zip / .rar</strong> 文件拖放到此处以安装</span> : '请先选择游戏'}</p>
                   </div>
                 </div>
               </div>
@@ -536,11 +534,11 @@ function App() {
         <div className="bottom-bar">
           {activeTab !== 'fetcher' && (
             <button onClick={handleAutoPatch} disabled={!steamPath} className="btn btn-primary">
-              Auto-Patch
+              修补 Steam
             </button>
           )}
           <button onClick={handleRestart} disabled={!steamPath} className="btn btn-secondary" style={{ marginLeft: activeTab === 'fetcher' ? 'auto' : 0 }}>
-            Restart Steam
+            重启 Steam
           </button>
         </div>
       </div>

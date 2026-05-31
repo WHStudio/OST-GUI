@@ -1,66 +1,33 @@
-# SafeSteamTools (OpenSteamTool-GUI)
+# OST-GUI
 
-![cpp](https://img.shields.io/badge/cpp-20%2B-green?logo=cplusplus)
-![CMake](https://img.shields.io/badge/CMake-3.20%2B-green?logo=cmake)
-![OnlyWindows](https://img.shields.io/badge/windows%20only-red?style=for-the-badge)
+## 介绍
 
-SafeSteamTools is a modern, beautifully designed GUI frontend for OpenSteamTool, a Windows DLL project built with CMake. 
+**Forked from [rev2ret/OpenSteamTool-GUI](https://github.com/rev2ret/OpenSteamTool-GUI)**
 
-## ✨ GUI Features
-- **Modern Interface**: A sleek, dark-mode glassmorphism interface built with React, Vite, and Electron.
-- **Smart Auto-Fetcher**: Instantly search the official Steam API by game name (no AppID hunting required!) to download required `.lua` configurations and manifests.
-- **Dedicated Online-Fixes Tab**: Automatically apply third-party online fixes (like Goldberg emulator). Select a target game from a dropdown and drop the `.zip` or `.rar` archive into the zone; the GUI parses your Steam library and handles the extraction silently.
-- **Dynamic Library Management**: View your active SafeSteamTools `.lua` patches, see depot/manifest counts, and easily remove them in one click.
-- **Auto-Patching**: 1-click Auto-Patch button compiles the C++ backend DLLs using CMake and smoothly injects them into your Steam installation.
+一款开源的图形化界面程序，Widnows系统专用。
 
-## Core Backend Unlocks
-- Unlock an unlimited number of unowned games.
-- Unlock all DLCs for unowned games.
-- Support auto load depot decryption keys from Lua config.
-- Support auto manifest download via `steamrun` / `wudrm` upstream APIs(default is `wudrm`), or a custom Lua endpoint (see [Manifest via Lua](#manifest-via-lua)).
-- Support downloading protected games or DLCs that require an access token.
-- Support binding manifest to prevent specific games from being updated.
+注意，本项目不包含来自[OpenSteam001/OpenSteamTool](https://github.com/OpenSteam001/OpenSteamTool)的关键源码，仅供个人学习使用！
 
-### Hot Reload
-- Adding, modifying, deleting, or overwriting `.lua` files in any watched directory automatically triggers a reload. No restart, no offline/online toggle needed.
+## 教程
 
-### Family Sharing and Remote Play
-- Bypass Steam Family Sharing restrictions, allowing shared games to be played without limitations.
+### 1. 构建
 
-### Compatible with games protected by Denuvo and SteamStub
-- For AppTicket and ETicket: in `HKEY_CURRENT_USER\Software\Valve\Steam\Apps\{AppId}`, both `AppTicket` and `ETicket` are `REG_BINARY` values.
-- Use `setAppTicket(appid, "hex")` and `setETicket(appid, "hex")` in Lua config to write these values to the registry automatically.
-- SteamID priority: read `SteamID` as `REG_SZ` (numeric-only) first; if missing, parse from `AppTicket`.
+```powershell
+cd .\manager\
+pnpm i
+pnpm build
+pnpm dist
+```
 
-### Stats and Achievements
-- Enable stats and achievements for unowned games.
-- Uses `setStat(appid, "steamid")` to configure which SteamID's achievement data to pull.
-- If no `setStat` is configured for an app, falls back to the hardcoded default SteamID `76561198028121353`.
+### 2. 使用
 
-### Online Fix
-- Add `-onlinefix` to the Steam launch parameters to enable 480-based online play in games that use lobby matchmaking. The current limitation is that only one such game can run at a time.To revert, simply remove -onlinefix from the launch parameters — online play returns to normal on the next launch.
+将构建所得`manager\release\OST-GUI 1.0.0.exe`放置到任意位置，然后创建`dlls`目录，放入**上游项目提供的3个dll文件**，目录结构如下：
 
-## Future
-- For games protected by Denuvo and SteamStub, find a safe timing to switch `GetSteamID` (see `src/Hook/Hooks_IPC.cpp#Handler_IClientUser_GetSteamID` TODO) so save files are not affected.(**Suggestions welcome — when is the earliest point after game initialization that we can safely switch the
-  SteamID without affecting save file binding?**)
-- Steam Cloud synchronization support.(This is a huge project)
-- Add Auto Denuvo Authorization Sharing for Legitimate Accounts.
-
-## GUI Usage (Recommended)
-1. Download `SafeSteamTools.exe` from the Releases tab.
-2. Run the application.
-3. Your Steam path will automatically be detected. Use the **Auto-Patch** button at the bottom to build and install the DLLs.
-4. Use the **Fetch** tab to search for games, download configurations, and apply patches instantly.
-
-## Manual Usage (Advanced)
-1. Run `build.bat` from the project root to build the project.
-2. Copy generated `dwmapi.dll`, `xinput1_4.dll` and `OpenSteamTool.dll` to the Steam root directory.
-3. Create Lua directory (for example `C:\steam\config\lua`) and place Lua scripts there. The DLL will automatically load and execute them.
-4. Lua example:
-```lua
-addappid(1361510) -- unlock game with appid 1361510
-
-addappid(1361511, 0,"5954562e7f5260400040a818bc29b60b335bb690066ff767e20d145a3b6b4af0") -- unlock game with appid 1361511 depotKey is "5954562e7f5260400040a818bc29b60b335bb690066ff767e20d145a3b6b4af0" 
-
-addtoken(1361510,"2764735786934684318") -- add access token ("2764735786934684318
-
+```tree
+OST-GUI
+├── OST-GUI 1.0.0.exe
+└── dlls
+    ├── OpenSteamTool.dll
+    ├── dwmapi.dll
+    └── xinput1_4.dll
+```

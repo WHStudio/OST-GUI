@@ -15,7 +15,7 @@ ipcMain.handle('select-directory', async () => {
   if (!mainWindow) return null;
   const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
-    title: 'Select Steam Folder'
+    title: '选择 Steam 文件夹'
   });
   if (!canceled && filePaths.length > 0) {
     return filePaths[0];
@@ -53,7 +53,7 @@ ipcMain.handle('install-online-fix', async (event, { steamPath, appId, zipPath }
   try {
     const vdfPath = path.join(steamPath, 'steamapps', 'libraryfolders.vdf');
     if (!fs.existsSync(vdfPath)) {
-      return { success: false, message: 'Could not find libraryfolders.vdf. Steam path may be invalid.' };
+      return { success: false, message: '找不到 libraryfolders.vdf。Steam 路径可能无效。' };
     }
 
     const vdfContent = fs.readFileSync(vdfPath, 'utf8');
@@ -76,19 +76,19 @@ ipcMain.handle('install-online-fix', async (event, { steamPath, appId, zipPath }
     }
 
     if (!targetInstallDir) {
-      return { success: false, message: `Could not find installation for AppID ${appId}. Make sure it is downloaded via Steam first.` };
+      return { success: false, message: `找不到 AppID ${appId} 的安装。请确保已通过 Steam 下载。` };
     }
     if (!fs.existsSync(targetInstallDir)) {
-      return { success: false, message: `Install folder not found on disk at: ${targetInstallDir}` };
+      return { success: false, message: `在磁盘上未找到安装文件夹：${targetInstallDir}` };
     }
 
     // Extract zip directly into target install dir
     const zip = new AdmZip(zipPath);
     zip.extractAllTo(targetInstallDir, true); // true = overwrite
 
-    return { success: true, message: `Successfully installed fix into: ${path.basename(targetInstallDir)}` };
+    return { success: true, message: `已成功将修复安装到：${path.basename(targetInstallDir)}` };
   } catch (err) {
-    return { success: false, message: 'Error applying fix: ' + err.message };
+    return { success: false, message: '应用修复时出错：' + err.message };
   }
 });
 
@@ -115,6 +115,8 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
+}
+
 // Helper to resolve Steam installation path from registry
 function getSteamPath() {
   return new Promise((resolve) => {
@@ -133,16 +135,25 @@ function getSteamPath() {
   });
 }
 
+// Resolve dlls/ directory next to the executable.
+// For portable (single-exe) builds, electron-builder extracts the app to a
+// temp directory at runtime, so app.getPath('exe') points there.  We must
+// read PORTABLE_EXECUTABLE_FILE to find where the user actually placed dlls/.
+function getDllDir() {
+  if (!app.isPackaged) {
+    return path.join(__dirname, '../../dlls');
+  }
+  const exePath = process.env.PORTABLE_EXECUTABLE_FILE || app.getPath('exe');
+  return path.join(path.dirname(exePath), 'dlls');
+}
+
 // Automatically patch Steam DLLs on startup if they are missing
 async function autoPatchOnStartup() {
   try {
     const steamPath = await getSteamPath();
     if (!steamPath) return;
 
-    const isPackaged = app.isPackaged;
-    const dllDir = isPackaged 
-      ? path.join(process.resourcesPath, 'dlls')
-      : path.join(__dirname, '../../dlls');
+    const dllDir = getDllDir();
 
     const dlls = ['OpenSteamTool.dll', 'dwmapi.dll', 'xinput1_4.dll'];
 
@@ -219,16 +230,16 @@ ipcMain.handle('get-steam-path', async () => {
 ipcMain.handle('auto-patch', async (event, steamPath) => {
   return new Promise((resolve) => {
     try {
-      const isPackaged = app.isPackaged;
-      const dllDir = isPackaged 
-        ? path.join(process.resourcesPath, 'dlls')
-        : path.join(__dirname, '../../dlls');
-      const rootDir = path.join(__dirname, '../../');
+      const dllDir = getDllDir();
+      console.log('[auto-patch] DLL directory:', dllDir);
       const dlls = ['OpenSteamTool.dll', 'dwmapi.dll', 'xinput1_4.dll'];
       
       const copyDlls = () => {
+        if (!fs.existsSync(dllDir)) {
+          resolve({ success: false, message: `未找到 dlls 文件夹（预期路径：${dllDir}）。请在该目录下放入 OpenSteamTool.dll、dwmapi.dll、xinput1_4.dll。` });
+          return;
+        }
         let copied = 0;
-        if (!fs.existsSync(dllDir)) return 0;
         for (const dll of dlls) {
           const src = path.join(dllDir, dll);
           const dest = path.join(steamPath, dll);
@@ -237,38 +248,18 @@ ipcMain.handle('auto-patch', async (event, steamPath) => {
             copied++;
           }
         }
-        return copied;
-      };
-      
-      const patchProcess = () => {
-        let copied = copyDlls();
         if (copied > 0) {
-          resolve({ success: true, message: `Successfully patched Steam with ${copied} DLLs.` });
-          return;
+          resolve({ success: true, message: `已成功使用 ${copied} 个 DLL 修补 Steam。` });
+        } else {
+          resolve({ success: false, message: `dlls 文件夹存在但缺少 DLL 文件（预期路径：${dllDir}）。请放入 OpenSteamTool.dll、dwmapi.dll、xinput1_4.dll。` });
         }
-        
-        // If DLLs are missing, build them from source automatically
-        event.sender.send('patch-status', 'Building C++ DLLs from source... (This may take a few minutes)');
-        exec('build.bat', { cwd: rootDir }, (error, stdout) => {
-          if (error) {
-            resolve({ success: false, message: 'Build failed: ' + error.message });
-            return;
-          }
-          
-          copied = copyDlls();
-          if (copied > 0) {
-            resolve({ success: true, message: `Build successful! Patched Steam with ${copied} DLLs.` });
-          } else {
-            resolve({ success: false, message: 'Build finished, but DLLs were still not found.' });
-          }
-        });
       };
 
       // Auto-kill steam before attempting to patch to avoid EBUSY locks
-      event.sender.send('patch-status', 'Closing Steam to unlock files...');
+      event.sender.send('patch-status', '正在关闭 Steam 以解锁文件...');
       exec('taskkill /F /IM steam.exe /T', () => {
         // Wait 1.5 seconds to ensure handles are released
-        setTimeout(patchProcess, 1500);
+        setTimeout(copyDlls, 1500);
       });
 
     } catch (e) {
@@ -308,7 +299,7 @@ ipcMain.handle('install-mods', async (event, { steamPath, files }) => {
           installed++;
         }
       }
-      resolve({ success: true, message: `Installed ${installed} files.` });
+      resolve({ success: true, message: `已安装 ${installed} 个文件。` });
     } catch (e) {
       resolve({ success: false, message: e.message });
     }
@@ -317,21 +308,21 @@ ipcMain.handle('install-mods', async (event, { steamPath, files }) => {
 
 const downloadManifestForAppId = (appid, steamPath, event, isDlc = false) => {
   return new Promise((resolve) => {
-    if (!isDlc) event.sender.send('download-status', `Checking database for AppID: ${appid}...`);
-    else event.sender.send('download-status', `Checking database for DLC: ${appid}...`);
+    if (!isDlc) event.sender.send('download-status', `正在检查数据库中 AppID：${appid}...`);
+    else event.sender.send('download-status', `正在检查数据库中 DLC：${appid}...`);
     
     const verifyUrl = `https://api.github.com/repos/SSMGAlt/ManifestHub2/branches/${appid}`;
-    const options = { headers: { 'User-Agent': 'OpenSteamTool-Manager' } };
+    const options = { headers: { 'User-Agent': 'Chrome' } };
     
     https.get(verifyUrl, options, (res) => {
       if (res.statusCode !== 200) {
-        if (!isDlc) resolve({ success: false, message: `Manifests for AppID ${appid} were not found in the database (Status: ${res.statusCode}).` });
+        if (!isDlc) resolve({ success: false, message: `在数据库中未找到 AppID ${appid} 的清单文件（状态：${res.statusCode}）。` });
         else resolve({ success: true, installed: 0 }); // Silently ignore DLCs without branches
         return;
       }
       
-      if (!isDlc) event.sender.send('download-status', `Found manifests for ${appid}. Downloading...`);
-      else event.sender.send('download-status', `Found manifests for DLC ${appid}. Downloading...`);
+      if (!isDlc) event.sender.send('download-status', `已找到 ${appid} 的清单文件。正在下载...`);
+      else event.sender.send('download-status', `已找到 DLC ${appid} 的清单文件。正在下载...`);
       
       const downloadUrl = `https://codeload.github.com/SSMGAlt/ManifestHub2/zip/refs/heads/${appid}`;
       const tempZipPath = path.join(__dirname, `../../temp_${appid}.zip`);
@@ -342,8 +333,8 @@ const downloadManifestForAppId = (appid, steamPath, event, isDlc = false) => {
         
         fileStream.on('finish', () => {
           fileStream.close();
-          if (!isDlc) event.sender.send('download-status', `Download complete for ${appid}. Extracting...`);
-          else event.sender.send('download-status', `Download complete for DLC ${appid}. Extracting...`);
+          if (!isDlc) event.sender.send('download-status', `${appid} 下载完成。正在解压...`);
+          else event.sender.send('download-status', `DLC ${appid} 下载完成。正在解压...`);
           
           try {
             const zip = new AdmZip(tempZipPath);
@@ -367,24 +358,24 @@ const downloadManifestForAppId = (appid, steamPath, event, isDlc = false) => {
             }
             fs.unlinkSync(tempZipPath);
             
-            if (installed > 0) resolve({ success: true, installed, message: `Successfully fetched and installed files for ${appid}!` });
+            if (installed > 0) resolve({ success: true, installed, message: `已成功获取并安装 ${appid} 的文件！` });
             else {
               if (isDlc) resolve({ success: true, installed: 0 });
-              else resolve({ success: false, message: 'Archive downloaded but no .lua or .manifest files were found inside.' });
+              else resolve({ success: false, message: '已下载压缩包但其中未找到 .lua 或 .manifest 文件。' });
             }
           } catch (err) {
             if (isDlc) resolve({ success: true, installed: 0 });
-            else resolve({ success: false, message: 'Error extracting zip: ' + err.message });
+            else resolve({ success: false, message: '解压 zip 时出错：' + err.message });
           }
         });
       }).on('error', (err) => {
         if (fs.existsSync(tempZipPath)) fs.unlinkSync(tempZipPath);
         if (isDlc) resolve({ success: true, installed: 0 });
-        else resolve({ success: false, message: 'Download failed: ' + err.message });
+        else resolve({ success: false, message: '下载失败：' + err.message });
       });
     }).on('error', (err) => {
       if (isDlc) resolve({ success: true, installed: 0 });
-      else resolve({ success: false, message: 'API request failed: ' + err.message });
+      else resolve({ success: false, message: 'API 请求失败：' + err.message });
     });
   });
 };
@@ -405,7 +396,7 @@ ipcMain.handle('download-manifests', async (event, { steamPath, appid, dlcs }) =
     }
   }
   
-  return { success: true, message: `Successfully fetched and installed ${totalInstalled} files for ${appid}${dlcs && dlcs.length > 0 ? ' and its DLCs' : ''}!` };
+  return { success: true, message: `已成功获取并安装 ${appid}${dlcs && dlcs.length > 0 ? ' 及其 DLC' : ''} 的 ${totalInstalled} 个文件！` };
 });
 
 ipcMain.handle('restart-steam', async (event, steamPath) => {
@@ -419,7 +410,7 @@ ipcMain.handle('restart-steam', async (event, steamPath) => {
           stdio: 'ignore'
         });
         child.unref();
-        resolve({ success: true, message: 'Steam is restarting...' });
+        resolve({ success: true, message: 'Steam 正在重启...' });
       } catch (startError) {
         resolve({ success: false, message: startError.message });
       }
@@ -553,7 +544,7 @@ ipcMain.handle('remove-game', async (event, { steamPath, luaFile, depotIds }) =>
       }
     }
 
-    return { success: true, message: `Removed ${removed} files.` };
+    return { success: true, message: `已移除 ${removed} 个文件。` };
   } catch (e) {
     return { success: false, message: e.message };
   }
